@@ -1,0 +1,8 @@
+{
+  "libraries": [
+    "Adafruit Unified Sensor",
+    "DHT sensor library",
+    "PubSubClient",
+    "107-Arduino-24LCxx"
+  ]
+}
