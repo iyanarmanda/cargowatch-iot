@@ -1,0 +1,978 @@
+{
+  "format": "velxio-project",
+  "version": 1,
+  "exportedAt": "2026-10-19T06:06:39.542Z",
+  "boards": [
+    {
+      "id": "esp32",
+      "boardKind": "esp32",
+      "x": 66.37632268990787,
+      "y": 35.31214772090462,
+      "activeFileGroupId": "group-esp32",
+      "languageMode": "arduino",
+      "serialBaudRate": 0,
+      "libraries": [
+        "Adafruit Unified Sensor",
+        "DHT sensor library",
+        "PubSubClient",
+        "107-Arduino-24LCxx"
+      ]
+    }
+  ],
+  "fileGroups": {
+    "group-esp32": [
+      {
+        "name": "sketch.ino",
+        "content": "#include <Wire.h>\n#include <DHT.h>\n#include <WiFi.h>\n#include <PubSubClient.h>\n#include <ArduinoJson.h>\n\n#include \"secrets.h\"\n\n#define DHTPIN 15\n#define DHTTYPE DHT22\n#define LED_PIN 2\n#define MPU_ADDR 0x68\n\nDHT dht(DHTPIN, DHTTYPE);\nWiFiClient espClient;\nPubSubClient mqttClient(espClient);\n\nString deviceId;\nString mqttTopic;\nunsigned long prevBlinkMillis = 0;\nunsigned long prevSendMillis = 0;\nbool alertState = false;\n\nString getUniqueDeviceId() {\n  uint64_t chipid = ESP.getEfuseMac();\n  char id[20];\n  snprintf(id, sizeof(id), \"ESP32-%04X%08X\", (uint16_t)(chipid >> 32), (uint32_t)chipid);\n  return String(id);\n}\n\nvoid handleAlert(bool isAlert) {\n  if (isAlert) {\n    if (millis() - prevBlinkMillis >= 150) {\n      prevBlinkMillis = millis();\n      alertState = !alertState;\n      digitalWrite(LED_PIN, alertState ? HIGH : LOW);\n    }\n  } else {\n    alertState = false;\n    digitalWrite(LED_PIN, LOW);\n  }\n}\n\nvoid setup() {\n  Serial.begin(115200);\n  pinMode(LED_PIN, OUTPUT);\n\n  dht.begin();\n  \n  Wire.begin(21, 22);\n  Wire.setClock(100000);\n  Wire.beginTransmission(MPU_ADDR);\n  Wire.write(0x6B);\n  Wire.write(0);\n  Wire.endTransmission(true);\n\n  WiFi.mode(WIFI_STA);\n  WiFi.begin(WIFI_SSID, WIFI_PASS);\n  Serial.print(\"Connecting to WiFi\");\n  int wifiTimeout = 0;\n  while (WiFi.status() != WL_CONNECTED && wifiTimeout < 20) {\n    delay(500);\n    Serial.print(\".\");\n    wifiTimeout++;\n  }\n\n  if (WiFi.status() == WL_CONNECTED) {\n    Serial.println(\" Connected!\");\n    Serial.print(\"IP Address: \");\n    Serial.println(WiFi.localIP());\n  } else {\n    Serial.println(\" WiFi Failed! Running in Offline Mode.\");\n  }\n\n  deviceId = getUniqueDeviceId();\n  mqttTopic = \"v1/telemetry/\" + deviceId + \"/data\";\n  \n  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);\n  mqttClient.setSocketTimeout(1);\n}\n\nvoid maintainMQTTConnection() {\n  if (WiFi.status() == WL_CONNECTED) {\n    if (!mqttClient.connected()) {\n      Serial.print(\"Connecting to MQTT Broker...\");\n      if (mqttClient.connect(deviceId.c_str(), MQTT_USER, MQTT_PASS)) {\n        Serial.println(\" Connected!\");\n      } else {\n        Serial.print(\" Failed, rc=\");\n        Serial.println(mqttClient.state());\n      }\n    } else {\n      mqttClient.loop();\n    }\n  }\n}\n\nvoid loop() {\n  float temp = dht.readTemperature();\n\n  Wire.beginTransmission(MPU_ADDR);\n  Wire.write(0x3B);\n  Wire.endTransmission(false);\n  Wire.requestFrom(MPU_ADDR, 6, true);\n\n  int16_t ax = Wire.read() << 8 | Wire.read();\n  int16_t ay = Wire.read() << 8 | Wire.read();\n  int16_t az = Wire.read() << 8 | Wire.read();\n\n  float ax_g = ax / 16384.0;\n  float ay_g = ay / 16384.0;\n  float az_g = az / 16384.0;\n  float gForce = sqrt(ax_g * ax_g + ay_g * ay_g + az_g * az_g);\n\n  bool tempAlert = (temp > 8.0 || temp < 2.0);\n  bool shockAlert = (gForce > 2.5);\n  bool isAlert = (tempAlert || shockAlert);\n\n  handleAlert(isAlert);\n\n  if (millis() - prevSendMillis >= 2000) {\n    prevSendMillis = millis();\n\n    maintainMQTTConnection();\n\n    if (mqttClient.connected()) {\n      JsonDocument doc;\n      doc[\"device_id\"] = deviceId;\n      doc[\"temperature\"] = serialized(String(temp, 1));\n      doc[\"g_force\"] = serialized(String(gForce, 2));\n      doc[\"temp_alert\"] = tempAlert;\n      doc[\"shock_alert\"] = shockAlert;\n\n      char jsonBuffer[200];\n      serializeJson(doc, jsonBuffer);\n\n      mqttClient.publish(mqttTopic.c_str(), jsonBuffer);\n      Serial.print(\"-> MQTT Published: \");\n      Serial.println(jsonBuffer);\n    }\n  }\n\n  delay(200);\n}"
+      },
+      {
+        "name": "secrets.h",
+        "content": "#ifndef SECRETS_H\n#define SECRETS_H\n\nconst char* WIFI_SSID   = \"Velxio-GUEST\";\nconst char* WIFI_PASS   = NULL;\nconst char* MQTT_BROKER = \"10.205.28.121\";\nconst int   MQTT_PORT   = 1883;\nconst char* MQTT_USER   = \"mqtt\";\nconst char* MQTT_PASS   = \"root\";\n\n#endif"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "mpu6050_1790086574076_nxx99ju8m",
+      "metadataId": "mpu6050",
+      "x": 625.8582240605328,
+      "y": 198.03823280040223,
+      "properties": {
+        "led1": false,
+        "accelX": 0,
+        "accelY": 0,
+        "accelZ": 1,
+        "gyroX": 0,
+        "gyroY": 0,
+        "gyroZ": 0,
+        "temp": 24
+      }
+    },
+    {
+      "id": "breadboard_1790066147171_fqnb07clf",
+      "metadataId": "breadboard",
+      "x": 294.34471324019887,
+      "y": 70.04697394189607,
+      "properties": {}
+    },
+    {
+      "id": "resistor_10k_1790087014900_1c2mc55nr",
+      "metadataId": "resistor-10k",
+      "x": 622.7307240605328,
+      "y": 162.01823280040225,
+      "properties": {
+        "value": "10000",
+        "rotation": 90
+      }
+    },
+    {
+      "id": "resistor_10k_1790087027266_ep0okfq33",
+      "metadataId": "resistor-10k",
+      "x": 613.1307240605327,
+      "y": 162.01823280040225,
+      "properties": {
+        "value": "10000",
+        "rotation": 90
+      }
+    },
+    {
+      "id": "resistor_10k_1790077241286_lekkfrgo5",
+      "metadataId": "resistor-10k",
+      "x": 316.7193434096502,
+      "y": 152.5386190884956,
+      "properties": {
+        "value": "10000",
+        "rotation": 90
+      }
+    },
+    {
+      "id": "resistor_10k_1790089232128_l3a2nbsfd",
+      "metadataId": "resistor-10k",
+      "x": 740.1547132401988,
+      "y": 162.64697394189608,
+      "properties": {
+        "value": "10000",
+        "rotation": 90
+      }
+    },
+    {
+      "id": "led_1790090130573_ehajffxjr",
+      "metadataId": "led",
+      "x": 771.4807240605329,
+      "y": 85.01823280040225,
+      "properties": {
+        "value": false,
+        "brightness": 1,
+        "color": "red",
+        "lightColor": null,
+        "label": "",
+        "flip": false
+      }
+    },
+    {
+      "id": "resistor_10k_1790077636684_7s025hcv6",
+      "metadataId": "resistor-10k",
+      "x": 480.9547132401989,
+      "y": 172.24697394189607,
+      "properties": {
+        "value": "10000",
+        "rotation": 90
+      }
+    },
+    {
+      "id": "dht22_1790066079881_am272o7c3",
+      "metadataId": "dht22",
+      "x": 512.5307240605327,
+      "y": 12.118232800402211,
+      "properties": {
+        "temperature": 25,
+        "humidity": 50
+      }
+    }
+  ],
+  "wires": [
+    {
+      "waypoints": [
+        {
+          "x": 314.9047132401989,
+          "y": 229.31214772090462
+        }
+      ],
+      "id": "wire-1790077984508",
+      "start": {
+        "componentId": "esp32",
+        "pinName": "GND2",
+        "x": 200.37632268990785,
+        "y": 229.31214772090462
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "1b.j",
+        "x": 314.9047132401989,
+        "y": 229.64697394189608
+      },
+      "color": "#000000",
+      "autoRouted": true
+    },
+    {
+      "waypoints": [
+        {
+          "x": 236.84482659217068,
+          "y": 242.31214772090462
+        },
+        {
+          "x": 236.84482659217068,
+          "y": 200.3386190884956
+        }
+      ],
+      "id": "wire-1790086470847",
+      "start": {
+        "componentId": "esp32",
+        "pinName": "3V3",
+        "x": 200.37632268990785,
+        "y": 242.31214772090462
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "2b.g",
+        "x": 324.5047132401989,
+        "y": 200.84697394189607
+      },
+      "color": "#cc0000",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 678.6468434096502,
+          "y": -52.14823889541809
+        },
+        {
+          "x": 291.88802204859047,
+          "y": -52.14823889541809
+        },
+        {
+          "x": 291.88802204859047,
+          "y": 152.3386190884956
+        }
+      ],
+      "id": "wire-1790086662689",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "GND",
+        "x": 696.6582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "1t.d",
+        "x": 314.9047132401989,
+        "y": 152.84697394189607
+      },
+      "color": "#000000",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 308.7193434096502,
+          "y": 162.44697394189606
+        },
+        {
+          "x": 308.7193434096502,
+          "y": 191.24697394189607
+        }
+      ],
+      "id": "wire-1790086703705",
+      "start": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "1t.e",
+        "x": 314.9047132401989,
+        "y": 162.44697394189606
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "1b.f",
+        "x": 314.9047132401989,
+        "y": 191.24697394189607
+      },
+      "color": "#8B4513",
+      "autoRouted": true
+    },
+    {
+      "waypoints": [
+        {
+          "x": 659.4693434096502,
+          "y": -25.154346657474935
+        },
+        {
+          "x": 281.4379855871156,
+          "y": -25.154346657474935
+        },
+        {
+          "x": 281.4379855871156,
+          "y": 115.31214772090462
+        }
+      ],
+      "id": "wire-1790087121471",
+      "start": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "37t.b",
+        "x": 660.5047132401988,
+        "y": 133.64697394189608
+      },
+      "end": {
+        "componentId": "esp32",
+        "pinName": "21",
+        "x": 200.37632268990785,
+        "y": 115.31214772090462
+      },
+      "color": "#00FFFF",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 269.2462763820616,
+          "y": 77.31214772090462
+        },
+        {
+          "x": 269.2462763820616,
+          "y": -37.92661344372199
+        },
+        {
+          "x": 669.0693434096502,
+          "y": -37.92661344372199
+        }
+      ],
+      "id": "wire-1790087127413",
+      "start": {
+        "componentId": "esp32",
+        "pinName": "22",
+        "x": 200.37632268990785,
+        "y": 77.31214772090462
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "38t.b",
+        "x": 670.1047132401989,
+        "y": 133.64697394189608
+      },
+      "color": "#22c55e",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 688.2468434096502,
+          "y": 4.2386190884955965
+        },
+        {
+          "x": 361.30310137789735,
+          "y": 4.2386190884955965
+        },
+        {
+          "x": 361.30310137789735,
+          "y": 132.5386190884956
+        }
+      ],
+      "id": "wire-1790086759454",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "VCC",
+        "x": 706.2582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "resistor_10k_1790077241286_lekkfrgo5",
+        "pinName": "1",
+        "x": 381.0693434096502,
+        "y": 132.5386190884956
+      },
+      "color": "#cc0000",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 381.0693434096502,
+          "y": 210.44697394189603
+        }
+      ],
+      "id": "wire-1790086215149",
+      "start": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "2b.h",
+        "x": 324.5047132401989,
+        "y": 210.44697394189603
+      },
+      "end": {
+        "componentId": "resistor_10k_1790077241286_lekkfrgo5",
+        "pinName": "2",
+        "x": 381.0693434096502,
+        "y": 191.33861908849562
+      },
+      "color": "#FF00FF",
+      "autoRouted": true
+    },
+    {
+      "waypoints": [
+        {
+          "x": 219.949243610902,
+          "y": 204.31214772090462
+        },
+        {
+          "x": 219.949243610902,
+          "y": -108.26313026716463
+        },
+        {
+          "x": 758.1889735038305,
+          "y": -108.26313026716463
+        },
+        {
+          "x": 758.1889735038305,
+          "y": 201.4469739418961
+        },
+        {
+          "x": 785.3047132401989,
+          "y": 201.4469739418961
+        }
+      ],
+      "id": "wire-1790089474366",
+      "start": {
+        "componentId": "esp32",
+        "pinName": "2",
+        "x": 200.37632268990785,
+        "y": 204.31214772090462
+      },
+      "end": {
+        "componentId": "resistor_10k_1790089232128_l3a2nbsfd",
+        "pinName": "2",
+        "x": 804.5047132401988,
+        "y": 201.44697394189603
+      },
+      "color": "#22c55e",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 282.80969578864807,
+          "y": 210.44697394189603
+        },
+        {
+          "x": 282.80969578864807,
+          "y": 321.5050418484215
+        },
+        {
+          "x": 792.4807240605329,
+          "y": 321.5050418484215
+        }
+      ],
+      "id": "wire-1790091748150",
+      "start": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "1b.h",
+        "x": 314.9047132401989,
+        "y": 210.44697394189603
+      },
+      "end": {
+        "componentId": "led_1790090130573_ehajffxjr",
+        "pinName": "C",
+        "x": 792.4807240605329,
+        "y": 133.01823280040225
+      },
+      "color": "#22c55e",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 545.3547132401989,
+          "y": 211.04697394189603
+        },
+        {
+          "x": 545.3547132401989,
+          "y": 294.3020309057117
+        },
+        {
+          "x": 269.2462763820616,
+          "y": 294.3020309057117
+        },
+        {
+          "x": 269.2462763820616,
+          "y": 216.31214772090462
+        }
+      ],
+      "id": "wire-1790087538888",
+      "start": {
+        "componentId": "resistor_10k_1790077636684_7s025hcv6",
+        "pinName": "2",
+        "x": 545.3047132401989,
+        "y": 211.04697394189603
+      },
+      "end": {
+        "componentId": "esp32",
+        "pinName": "15",
+        "x": 200.37632268990785,
+        "y": 216.31214772090462
+      },
+      "color": "#22c55e",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 400.69249814890867,
+          "y": 132.5386190884956
+        },
+        {
+          "x": 400.69249814890867,
+          "y": 19.24184473827886
+        },
+        {
+          "x": 486.3628444499845,
+          "y": 19.24184473827886
+        },
+        {
+          "x": 486.3628444499845,
+          "y": 133.1386190884956
+        }
+      ],
+      "id": "wire-1790086228310",
+      "start": {
+        "componentId": "resistor_10k_1790077241286_lekkfrgo5",
+        "pinName": "1",
+        "x": 381.0693434096502,
+        "y": 132.5386190884956
+      },
+      "end": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "VCC",
+        "x": 533.5307240605327,
+        "y": 133.01823280040222
+      },
+      "color": "#cc0000",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 545.3547132401989,
+          "y": 220.04697394189606
+        }
+      ],
+      "id": "wire-1790087777279",
+      "start": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "1b.i",
+        "x": 314.9047132401989,
+        "y": 220.04697394189606
+      },
+      "end": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "GND",
+        "x": 562.3307240605327,
+        "y": 133.01823280040222
+      },
+      "color": "#0000cc",
+      "autoRouted": false
+    },
+    {
+      "waypoints": [
+        {
+          "x": 545.3047132401989,
+          "y": 133.01823280040222
+        }
+      ],
+      "id": "wire-1790087397572",
+      "start": {
+        "componentId": "resistor_10k_1790077636684_7s025hcv6",
+        "pinName": "1",
+        "x": 545.3047132401989,
+        "y": 152.24697394189607
+      },
+      "end": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "SDA",
+        "x": 543.0307240605327,
+        "y": 133.01823280040222
+      },
+      "color": "#22c55e",
+      "autoRouted": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-0-35b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "INT",
+        "x": 639.1382240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "35b.h",
+        "x": 641.3047132401989,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-1-36b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "AD0",
+        "x": 648.7582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "36b.h",
+        "x": 650.9047132401988,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-2-37b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "XCL",
+        "x": 658.2582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "37b.h",
+        "x": 660.5047132401988,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-3-38b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "XDA",
+        "x": 667.8582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "38b.h",
+        "x": 670.1047132401989,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-4-39b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "SDA",
+        "x": 677.4582240605329,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "39b.h",
+        "x": 679.7047132401989,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-5-40b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "SCL",
+        "x": 687.0582240605329,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "40b.h",
+        "x": 689.3047132401989,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-6-41b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "GND",
+        "x": 696.6582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "41b.h",
+        "x": 698.9047132401988,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-mpu6050_1790086574076_nxx99ju8m-7-42b.h",
+      "start": {
+        "componentId": "mpu6050_1790086574076_nxx99ju8m",
+        "pinName": "VCC",
+        "x": 706.2582240605328,
+        "y": 209.81823280040223
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "42b.h",
+        "x": 708.5047132401988,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790087014900_1c2mc55nr-0-40t.c",
+      "start": {
+        "componentId": "resistor_10k_1790087014900_1c2mc55nr",
+        "pinName": "1",
+        "x": 687.0807240605328,
+        "y": 142.01823280040225
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "40t.c",
+        "x": 689.3047132401989,
+        "y": 143.24697394189604
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790087014900_1c2mc55nr-1-40b.g",
+      "start": {
+        "componentId": "resistor_10k_1790087014900_1c2mc55nr",
+        "pinName": "2",
+        "x": 687.0807240605328,
+        "y": 200.8182328004022
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "40b.g",
+        "x": 689.3047132401989,
+        "y": 200.84697394189607
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790087027266_ep0okfq33-0-39t.c",
+      "start": {
+        "componentId": "resistor_10k_1790087027266_ep0okfq33",
+        "pinName": "1",
+        "x": 677.4807240605327,
+        "y": 142.01823280040225
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "39t.c",
+        "x": 679.7047132401989,
+        "y": 143.24697394189604
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790087027266_ep0okfq33-1-39b.g",
+      "start": {
+        "componentId": "resistor_10k_1790087027266_ep0okfq33",
+        "pinName": "2",
+        "x": 677.4807240605327,
+        "y": 200.8182328004022
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "39b.g",
+        "x": 679.7047132401989,
+        "y": 200.84697394189607
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790077241286_lekkfrgo5-0-8t.b",
+      "start": {
+        "componentId": "resistor_10k_1790077241286_lekkfrgo5",
+        "pinName": "1",
+        "x": 381.0693434096502,
+        "y": 132.5386190884956
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "8t.b",
+        "x": 382.10471324019886,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790077241286_lekkfrgo5-1-8b.f",
+      "start": {
+        "componentId": "resistor_10k_1790077241286_lekkfrgo5",
+        "pinName": "2",
+        "x": 381.0693434096502,
+        "y": 191.33861908849562
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "8b.f",
+        "x": 382.10471324019886,
+        "y": 191.24697394189607
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790089232128_l3a2nbsfd-0-52t.c",
+      "start": {
+        "componentId": "resistor_10k_1790089232128_l3a2nbsfd",
+        "pinName": "1",
+        "x": 804.5047132401988,
+        "y": 142.64697394189608
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "52t.c",
+        "x": 804.5047132401988,
+        "y": 143.24697394189604
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790089232128_l3a2nbsfd-1-52b.g",
+      "start": {
+        "componentId": "resistor_10k_1790089232128_l3a2nbsfd",
+        "pinName": "2",
+        "x": 804.5047132401988,
+        "y": 201.44697394189603
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "52b.g",
+        "x": 804.5047132401988,
+        "y": 200.84697394189607
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-led_1790090130573_ehajffxjr-0-52t.b",
+      "start": {
+        "componentId": "led_1790090130573_ehajffxjr",
+        "pinName": "A",
+        "x": 802.4807240605329,
+        "y": 133.01823280040225
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "52t.b",
+        "x": 804.5047132401988,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-led_1790090130573_ehajffxjr-1-51t.b",
+      "start": {
+        "componentId": "led_1790090130573_ehajffxjr",
+        "pinName": "C",
+        "x": 792.4807240605329,
+        "y": 133.01823280040225
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "51t.b",
+        "x": 794.9047132401988,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790077636684_7s025hcv6-0-25t.d",
+      "start": {
+        "componentId": "resistor_10k_1790077636684_7s025hcv6",
+        "pinName": "1",
+        "x": 545.3047132401989,
+        "y": 152.24697394189607
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "25t.d",
+        "x": 545.3047132401989,
+        "y": 152.84697394189607
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-resistor_10k_1790077636684_7s025hcv6-1-25b.h",
+      "start": {
+        "componentId": "resistor_10k_1790077636684_7s025hcv6",
+        "pinName": "2",
+        "x": 545.3047132401989,
+        "y": 211.04697394189603
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "25b.h",
+        "x": 545.3047132401989,
+        "y": 210.44697394189603
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-dht22_1790066079881_am272o7c3-0-24t.b",
+      "start": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "VCC",
+        "x": 533.5307240605327,
+        "y": 133.01823280040222
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "24t.b",
+        "x": 535.7047132401988,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-dht22_1790066079881_am272o7c3-1-25t.b",
+      "start": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "SDA",
+        "x": 543.0307240605327,
+        "y": 133.01823280040222
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "25t.b",
+        "x": 545.3047132401989,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-dht22_1790066079881_am272o7c3-2-26t.b",
+      "start": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "NC",
+        "x": 552.6307240605328,
+        "y": 133.01823280040222
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "26t.b",
+        "x": 554.9047132401988,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    },
+    {
+      "id": "bbwire-dht22_1790066079881_am272o7c3-3-27t.b",
+      "start": {
+        "componentId": "dht22_1790066079881_am272o7c3",
+        "pinName": "GND",
+        "x": 562.3307240605327,
+        "y": 133.01823280040222
+      },
+      "end": {
+        "componentId": "breadboard_1790066147171_fqnb07clf",
+        "pinName": "27t.b",
+        "x": 564.5047132401988,
+        "y": 133.64697394189608
+      },
+      "waypoints": [],
+      "color": "#000000",
+      "bb": true
+    }
+  ],
+  "activeBoardId": "esp32"
+}
